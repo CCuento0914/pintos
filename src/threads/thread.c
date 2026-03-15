@@ -337,7 +337,7 @@ thread_foreach (thread_action_func *func, void *aux)
     }
 }
 
-/* Comparitor for ordering thread by wakeup_tick */
+/* Comparator for ordering thread by wakeup_tick */
 bool 
 wakeup_less (const struct list_elem *a, const struct list_elem *b, void *aux UNUSED) 
 {
@@ -347,6 +347,7 @@ wakeup_less (const struct list_elem *a, const struct list_elem *b, void *aux UNU
   return t_a->wakeup_tick < t_b->wakeup_tick;
 }
 
+/* Sleeps until the specified tick count is reached.*/
 void
 thread_sleep (int64_t wakeup_tick) 
 {
@@ -363,6 +364,7 @@ thread_sleep (int64_t wakeup_tick)
   intr_set_level (old_level);
 }
 
+/* Handles waking up threads */
 void
 thread_wake (int64_t current_tick) 
 {
