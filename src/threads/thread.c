@@ -252,6 +252,10 @@ thread_unblock (struct thread *t)
   list_insert_ordered (&ready_list, &t->elem, priority_more, NULL); // insert the thread into the ready list in order of priority
   t->status = THREAD_READY;
   intr_set_level (old_level);
+
+  if (!intr_context()){
+    thread_preempt();
+  }
 }
 
 /** Returns the name of the running thread. */
@@ -397,6 +401,25 @@ priority_more (const struct list_elem *a, const struct list_elem *b, void *aux U
   const struct thread *t_b = list_entry (b, struct thread, elem);
 
   return t_a->priority > t_b->priority;
+}
+
+/* Preempts the current thread if a higher-priority thread is ready */
+void 
+thread_preempt(void){
+  if (!list_empty(&ready_list)){
+    return;
+  }
+
+  struct thread *cur = thread_current();
+  struct thread *front = list_entry(list_front(&ready_list), struct thread, elem);
+
+  if (front->priority > cur ->priority){ // 
+    if (intr_context()){
+      intr_yield_on_return();
+    } else {
+    thread_yield();
+    }
+  }
 }
 
 /** Sets the current thread's priority to NEW_PRIORITY. */
