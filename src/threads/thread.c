@@ -28,6 +28,9 @@ static struct list ready_list;
    when they are first scheduled and removed when they exit. */
 static struct list all_list;
 
+/** Global sleep queue. */
+static struct list sleep_list; 
+
 /** Idle thread. */
 static struct thread *idle_thread;
 
@@ -58,6 +61,8 @@ static unsigned thread_ticks;   /**< # of timer ticks since last yield. */
    If true, use multi-level feedback queue scheduler.
    Controlled by kernel command-line option "-o mlfqs". */
 bool thread_mlfqs;
+
+static bool wakeup_less (const struct list_elem *a, const struct list_elem *b, void *aux UNUSED);
 
 static void kernel_thread (thread_func *, void *aux);
 
@@ -92,6 +97,7 @@ thread_init (void)
   lock_init (&tid_lock);
   list_init (&ready_list);
   list_init (&all_list);
+  list_init (&sleep_list);
 
   /* Set up a thread structure for the running thread. */
   initial_thread = running_thread ();
@@ -329,6 +335,50 @@ thread_foreach (thread_action_func *func, void *aux)
       struct thread *t = list_entry (e, struct thread, allelem);
       func (t, aux);
     }
+}
+
+/* Comparitor for ordering thread by wakeup_tick */
+bool 
+wakeup_less (const struct list_elem *a, const struct list_elem *b, void *aux UNUSED) 
+{
+  const struct thread *t_a = list_entry (a, struct thread, elem);
+  const struct thread *t_b = list_entry (b, struct thread, elem);
+
+  return t_a->wakeup_tick < t_b->wakeup_tick;
+}
+
+void
+thread_sleep (int64_t wakeup_tick) 
+{
+  struct thread *cur = thread_current ();
+  enum intr_level old_level;
+
+  ASSERT (intr_get_level () == INTR_ON);
+
+  cur->wakeup_tick = wakeup_tick;
+
+  old_level = intr_disable ();
+  list_insert_ordered(&sleep_list, &cur->elem, wakeup_less, NULL);
+  thread_block();
+  intr_set_level (old_level);
+}
+
+void
+thread_wake (int64_t current_tick) 
+{
+  enum intr_level old_level = intr_disable ();
+
+  while (!list_empty (&sleep_list)) 
+    {
+      struct thread *t = list_entry (list_front (&sleep_list), struct thread, elem);
+      if (t->wakeup_tick > current_tick) 
+        break;
+
+      list_pop_front (&sleep_list);
+      thread_unblock (t);
+    }
+
+  intr_set_level (old_level);
 }
 
 /** Sets the current thread's priority to NEW_PRIORITY. */
