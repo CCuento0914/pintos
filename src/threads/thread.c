@@ -354,14 +354,14 @@ thread_sleep (int64_t wakeup_tick)
   struct thread *cur = thread_current ();
   enum intr_level old_level;
 
-  ASSERT (intr_get_level () == INTR_ON);
+  ASSERT (intr_get_level () == INTR_ON); // ensures that interrupts are on
 
-  cur->wakeup_tick = wakeup_tick;
+  cur->wakeup_tick = wakeup_tick; // set to timer_ticks() + ticks
 
-  old_level = intr_disable ();
-  list_insert_ordered(&sleep_list, &cur->elem, wakeup_less, NULL);
-  thread_block();
-  intr_set_level (old_level);
+  old_level = intr_disable (); 
+  list_insert_ordered(&sleep_list, &cur->elem, wakeup_less, NULL); // insert the thread into the sleep list in order of wakeup_tick
+  thread_block(); // block thread until woken up by thread_wake
+  intr_set_level (old_level); // restore previous interrupt level
 }
 
 /* Handles waking up threads */
@@ -370,11 +370,11 @@ thread_wake (int64_t current_tick)
 {
   enum intr_level old_level = intr_disable ();
 
-  while (!list_empty (&sleep_list)) 
+  while (!list_empty(&sleep_list)) 
     {
-      struct thread *t = list_entry (list_front (&sleep_list), struct thread, elem);
+      struct thread *t = list_entry (list_front(&sleep_list), struct thread, elem); // get the thread with earliest wakeup_tick
       if (t->wakeup_tick > current_tick) 
-        break;
+        break; 
 
       list_pop_front (&sleep_list);
       thread_unblock (t);
