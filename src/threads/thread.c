@@ -252,10 +252,6 @@ thread_unblock (struct thread *t)
   list_insert_ordered (&ready_list, &t->elem, priority_more, NULL); // insert the thread into the ready list in order of priority
   t->status = THREAD_READY;
   intr_set_level (old_level);
-
-  if (!intr_context()){
-    thread_preempt();
-  }
 }
 
 /** Returns the name of the running thread. */
@@ -348,7 +344,7 @@ thread_foreach (thread_action_func *func, void *aux)
 }
 
 /* Comparator for ordering thread by wakeup_tick */
-bool 
+static bool 
 wakeup_less (const struct list_elem *a, const struct list_elem *b, void *aux UNUSED) 
 {
   const struct thread *t_a = list_entry (a, struct thread, elem);
@@ -394,7 +390,7 @@ thread_wake (int64_t current_tick)
 }
 
 /* Comparator for ordering thread by priority */
-bool
+static bool
 priority_more (const struct list_elem *a, const struct list_elem *b, void *aux UNUSED) 
 {
   const struct thread *t_a = list_entry (a, struct thread, elem);
@@ -405,13 +401,17 @@ priority_more (const struct list_elem *a, const struct list_elem *b, void *aux U
 
 /* Preempts the current thread if a higher-priority thread is ready */
 void 
-thread_preempt(void){
-  if (!list_empty(&ready_list)){
+thread_preempt(void)
+{
+  struct thread *cur;
+  struct thread *front;
+
+  if (list_empty(&ready_list)){
     return;
   }
 
-  struct thread *cur = thread_current();
-  struct thread *front = list_entry(list_front(&ready_list), struct thread, elem);
+  cur = thread_current();
+  front = list_entry(list_front(&ready_list), struct thread, elem);
 
   if (front->priority > cur ->priority){ // 
     if (intr_context()){
