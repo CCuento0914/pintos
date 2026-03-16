@@ -87,13 +87,18 @@ struct thread
     enum thread_status status;          /**< Thread state. */
     char name[16];                      /**< Name (for debugging purposes). */
     uint8_t *stack;                     /**< Saved stack pointer. */
-    int priority;                       /**< Priority. */
+    int priority;                       /**< NEW effective Priority after potential donations. */
     struct list_elem allelem;           /**< List element for all threads list. */
     uint64_t wakeup_tick;               /**< Wakeup timestamp. */
 
     /* Shared between thread.c and synch.c. */
     struct list_elem elem;              /**< List element. */
     struct list *sleep_list;
+
+    int original_priority;              /**< Original priority before donation. */
+    struct list donations;              /**< List of threads that donated priority to this thread. */
+    struct list_elem donation_elem;     /**< List element for donation list. */
+    struct thread *waiting_on_lock;     /**< The lock that this thread is waiting on. */
 
 #ifdef USERPROG
     /* Owned by userprog/process.c. */
@@ -131,6 +136,12 @@ void thread_yield (void);
 /** Performs some operation on thread t, given auxiliary data AUX. */
 typedef void thread_action_func (struct thread *t, void *aux);
 void thread_foreach (thread_action_func *, void *);
+
+struct lock;
+
+void donate_priority (void);
+void thread_restore_priority (void);
+void remove_donations_for_lock (struct lock *lock);
 
 int thread_get_priority (void);
 void thread_set_priority (int);

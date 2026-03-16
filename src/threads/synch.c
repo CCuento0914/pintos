@@ -34,6 +34,7 @@
 
 static bool sema_priority_more (const struct list_elem *a, const struct list_elem *b, void *aux UNUSED);
 static bool thread_priority_more (const struct list_elem *a, const struct list_elem *b, void *aux UNUSED);
+static bool donation_priority_more (const struct list_elem *a, const struct list_elem *b, void *aux UNUSED);
 
 /* Comparator for threads based on priority. */
 static bool
@@ -41,6 +42,16 @@ thread_priority_more (const struct list_elem *a, const struct list_elem *b, void
 {
   const struct thread *t_a = list_entry (a, struct thread, elem);
   const struct thread *t_b = list_entry (b, struct thread, elem);
+
+  return t_a->priority > t_b->priority;
+} 
+
+/* Comparator for donations based on priority. */
+static bool
+donation_priority_more (const struct list_elem *a, const struct list_elem *b, void *aux UNUSED)
+{
+  const struct thread *t_a = list_entry (a, struct thread, donation_elem);
+  const struct thread *t_b = list_entry (b, struct thread, donation_elem);
 
   return t_a->priority > t_b->priority;
 } 
@@ -226,7 +237,15 @@ lock_acquire (struct lock *lock)
   ASSERT (!intr_context ());
   ASSERT (!lock_held_by_current_thread (lock));
 
+  if (lock->holder != NULL){
+    struct thread *cur = thread_current();
+    cur->waiting_on_lock = lock;
+    list_insert_ordered(&lock->holder->donations, &cur->donation_elem, donation_priority_more, NULL); // insert current thread into donation list of lock holder in order of priority 
+    donate_priority();
+  }
+
   sema_down (&lock->semaphore);
+  thread_current()->waiting_on_lock = NULL; // set waiting_on_lock before acquiring the lock to ensure correct behavior of priority donation
   lock->holder = thread_current ();
 }
 
@@ -260,6 +279,9 @@ lock_release (struct lock *lock)
 {
   ASSERT (lock != NULL);
   ASSERT (lock_held_by_current_thread (lock));
+
+  remove_donations_for_lock(lock); // remove any donations that were made to the current thread for this lock
+  thread_restore_priority();
 
   lock->holder = NULL;
   sema_up (&lock->semaphore);
