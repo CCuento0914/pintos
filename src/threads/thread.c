@@ -459,7 +459,7 @@ donate_priority (void)
   struct lock *lock = cur->waiting_on_lock;
   int depth = 0;
 
-  while (lock != NULL && lock->holder != NULL && depth < 8)
+  while (lock != NULL && lock->holder != NULL && depth < 8) // limit depth to 8 as outlined by project description
     {
       if (lock->holder->priority < cur->priority)
         lock->holder->priority = cur->priority;
