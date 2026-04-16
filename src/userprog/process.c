@@ -20,6 +20,12 @@
 
 static thread_func start_process NO_RETURN;
 static bool load (const char *cmdline, void (**eip) (void), void **esp);
+struct exec_info
+  {
+    char *cmdline;
+    struct thread *parent;
+    struct child_status *child_record;
+  };
 
 /** Starts a new thread running a user program loaded from
    FILENAME.  The new thread may be scheduled (and may even exit)
@@ -34,14 +40,17 @@ process_execute (const char *file_name)
   char *prog_name;
   tid_t tid;
 
-  /* Make a copy of FILE_NAME.
-     Otherwise there's a race between the caller and load(). */
+  struct thread *cur = thread_current ();
+  struct child_status *cs = NULL;
+  struct exec_info *info = NULL;
+
+  /* Make a private copy of FILE_NAME for the child to load. */
   fn_copy = palloc_get_page (0);
   if (fn_copy == NULL)
     return TID_ERROR;
   strlcpy (fn_copy, file_name, PGSIZE);
 
-  /* Make a temporary copy of the program name. */
+  /* Make a temporary copy to extract the program name. */
   name_copy = palloc_get_page (0);
   if (name_copy == NULL)
     {
@@ -50,41 +59,82 @@ process_execute (const char *file_name)
     }
   strlcpy (name_copy, file_name, PGSIZE);
 
-  /* Extract the program name for thread name. */
   prog_name = strtok_r (name_copy, " ", &save_ptr);
   if (prog_name == NULL)
     prog_name = name_copy;
 
-  /* Create a new thread to execute FILE_NAME. */
-  tid = thread_create (prog_name, PRI_DEFAULT, start_process, fn_copy);
-  palloc_free_page(name_copy);
+  /* Create child status record for wait(). */
+  cs = malloc (sizeof *cs);
+  if (cs == NULL)
+    {
+      palloc_free_page (fn_copy);
+      palloc_free_page (name_copy);
+      return TID_ERROR;
+    }
+
+  cs->tid = TID_ERROR;
+  cs->exit_status = -1;
+  cs->waited = false;
+  cs->child_alive = true;
+  sema_init (&cs->dead_sema, 0);
+
+  /* Bundle startup info for the child thread. */
+  info = malloc (sizeof *info);
+  if (info == NULL)
+    {
+      free (cs);
+      palloc_free_page (fn_copy);
+      palloc_free_page (name_copy);
+      return TID_ERROR;
+    }
+
+  info->cmdline = fn_copy;
+  info->parent = cur;
+  info->child_record = cs;
+
+  tid = thread_create (prog_name, PRI_DEFAULT, start_process, info);
+
+  palloc_free_page (name_copy);
+
   if (tid == TID_ERROR)
-    palloc_free_page (fn_copy); 
+    {
+      free (info);
+      free (cs);
+      palloc_free_page (fn_copy);
+      return TID_ERROR;
+    }
+
+  cs->tid = tid;
+  list_push_back (&cur->children, &cs->elem);
   return tid;
 }
 
 /** A thread function that loads a user process and starts it
    running. */
 static void
-start_process (void *file_name_)
+start_process (void *exec_info_)
 {
-  char *file_name = file_name_;
+  struct exec_info *info = exec_info_;
+  char *file_name = info->cmdline;
   struct intr_frame if_;
   bool success;
-  struct thread *cur = thread_current();
+  struct thread *cur = thread_current ();
 
-  cur->exit_status = -1; // Initialize to -1 to indicate that the process has not exited yet.
+  cur->parent = info->parent;
+  cur->child_record = info->child_record;
+  cur->exit_status = -1;
 
-  /* Initialize interrupt frame and load executable. */
+  free (info);
+
   memset (&if_, 0, sizeof if_);
   if_.gs = if_.fs = if_.es = if_.ds = if_.ss = SEL_UDSEG;
   if_.cs = SEL_UCSEG;
   if_.eflags = FLAG_IF | FLAG_MBS;
   success = load (file_name, &if_.eip, &if_.esp);
 
-  /* If load failed, quit. */
   palloc_free_page (file_name);
-  if (!success) 
+
+  if (!success)
     thread_exit ();
 
   /* Start the user process by simulating a return from an
@@ -109,6 +159,34 @@ start_process (void *file_name_)
 int
 process_wait (tid_t child_tid UNUSED) 
 {
+  struct thread *cur = thread_current ();
+  struct list_elem *e;
+  struct child_status *cs;
+
+  for (e = list_begin (&cur->children);
+       e != list_end (&cur->children);
+       e = list_next (e))
+    {
+      cs = list_entry (e, struct child_status, elem);
+      if (cs->tid == child_tid)
+        {
+          if (cs->waited)
+            return -1;
+
+          cs->waited = true;
+
+          if (cs->child_alive)
+            sema_down (&cs->dead_sema);
+
+          list_remove (&cs->elem);
+          {
+            int status = cs->exit_status;
+            free (cs);
+            return status;
+          }
+        }
+    }
+
   return -1;
 }
 
@@ -122,6 +200,13 @@ process_exit (void)
   /* Print exit status exactly once. */
   if(cur->pagedir != NULL)
     printf ("%s: exit(%d)\n", cur->name, cur->exit_status);
+
+  if (cur->child_record != NULL)
+    {
+      cur->child_record->exit_status = cur->exit_status;
+      cur->child_record->child_alive = false;
+      sema_up (&cur->child_record->dead_sema);
+    }
 
   /* Destroy the current process's page directory and switch back
      to the kernel-only page directory. */
