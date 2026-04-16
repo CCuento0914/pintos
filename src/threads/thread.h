@@ -4,6 +4,8 @@
 #include <debug.h>
 #include <list.h>
 #include <stdint.h>
+#include "threads/synch.h"
+#include "lib/kernel/list.h"
 
 /** States in a thread's life cycle. */
 enum thread_status
@@ -23,6 +25,16 @@ typedef int tid_t;
 #define PRI_MIN 0                       /**< Lowest priority. */
 #define PRI_DEFAULT 31                  /**< Default priority. */
 #define PRI_MAX 63                      /**< Highest priority. */
+
+struct child_status
+  {
+    tid_t tid;                    /* Child thread id. */
+    int exit_status;              /* Child's final exit status. */
+    bool waited;                  /* Has parent already waited? */
+    bool child_alive;             /* Child still running? */
+    struct semaphore dead_sema;   /* Up'd when child exits. */
+    struct list_elem elem;        /* Parent's children list element. */
+  };
 
 /** A kernel thread or user process.
 
@@ -100,6 +112,10 @@ struct thread
     struct list_elem donation_elem;     /**< List element for donation list. */
     struct thread *waiting_on_lock;     /**< The lock that this thread is waiting on. */
     int exit_status;                   /**< Exit status of the thread. */
+
+    struct list children;                 /* My direct children. */
+    struct child_status *child_record;    /* My record in parent's child list. */
+    struct thread *parent;                /* My parent thread. */
 
 #ifdef USERPROG
     /* Owned by userprog/process.c. */
