@@ -29,6 +29,9 @@ tid_t
 process_execute (const char *file_name) 
 {
   char *fn_copy;
+  char *name_copy;
+  char *save_ptr;
+  char *prog_name;
   tid_t tid;
 
   /* Make a copy of FILE_NAME.
@@ -38,8 +41,23 @@ process_execute (const char *file_name)
     return TID_ERROR;
   strlcpy (fn_copy, file_name, PGSIZE);
 
+  /* Make a temporary copy of the program name. */
+  name_copy = palloc_get_page (0);
+  if (name_copy == NULL)
+    {
+      palloc_free_page (fn_copy);
+      return TID_ERROR;
+    }
+  strlcpy (name_copy, file_name, PGSIZE);
+
+  /* Extract the program name for thread name. */
+  prog_name = strtok_r (name_copy, " ", &save_ptr);
+  if (prog_name == NULL)
+    prog_name = name_copy;
+
   /* Create a new thread to execute FILE_NAME. */
   tid = thread_create (file_name, PRI_DEFAULT, start_process, fn_copy);
+  palloc_free_page(name_copy);
   if (tid == TID_ERROR)
     palloc_free_page (fn_copy); 
   return tid;
@@ -53,6 +71,9 @@ start_process (void *file_name_)
   char *file_name = file_name_;
   struct intr_frame if_;
   bool success;
+  struct thread *cur = thread_current();
+
+  cur->exit_status = -1; // Initialize to -1 to indicate that the process has not exited yet.
 
   /* Initialize interrupt frame and load executable. */
   memset (&if_, 0, sizeof if_);
@@ -97,6 +118,10 @@ process_exit (void)
 {
   struct thread *cur = thread_current ();
   uint32_t *pd;
+
+  /* Print exit status exactly once. */
+  if(cur->pagedir != NULL)
+    printf ("%s: exit(%d)\n", cur->name, cur->exit_status);
 
   /* Destroy the current process's page directory and switch back
      to the kernel-only page directory. */

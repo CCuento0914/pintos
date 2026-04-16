@@ -99,6 +99,7 @@ struct thread
     struct list donations;              /**< List of threads that donated priority to this thread. */
     struct list_elem donation_elem;     /**< List element for donation list. */
     struct thread *waiting_on_lock;     /**< The lock that this thread is waiting on. */
+    int exit_status;                   /**< Exit status of the thread. */
 
 #ifdef USERPROG
     /* Owned by userprog/process.c. */
