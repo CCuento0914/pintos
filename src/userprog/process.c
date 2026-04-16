@@ -220,7 +220,7 @@ struct Elf32_Phdr
 #define PF_W 2          /**< Writable. */
 #define PF_R 4          /**< Readable. */
 
-static bool setup_stack (void **esp);
+static bool setup_stack (void **esp, const char *cmdline);
 static bool validate_segment (const struct Elf32_Phdr *, struct file *);
 static bool load_segment (struct file *file, off_t ofs, uint8_t *upage,
                           uint32_t read_bytes, uint32_t zero_bytes,
@@ -231,7 +231,7 @@ static bool load_segment (struct file *file, off_t ofs, uint8_t *upage,
    and its initial stack pointer into *ESP.
    Returns true if successful, false otherwise. */
 bool
-load (const char *file_name, void (**eip) (void), void **esp) 
+load (const char *cmdline, void (**eip) (void), void **esp) 
 {
   struct thread *t = thread_current ();
   struct Elf32_Ehdr ehdr;
@@ -240,17 +240,30 @@ load (const char *file_name, void (**eip) (void), void **esp)
   bool success = false;
   int i;
 
+  char *cmd_copy = NULL;
+  char *save_ptr;
+  char *prog_name;
+
   /* Allocate and activate page directory. */
   t->pagedir = pagedir_create ();
   if (t->pagedir == NULL) 
     goto done;
   process_activate ();
 
+  cmd_copy = palloc_get_page (0);
+  if (cmd_copy == NULL)
+    goto done;
+  strlcpy (cmd_copy, cmdline, PGSIZE);
+
+  prog_name = strtok_r (cmd_copy, " ", &save_ptr);
+  if (prog_name == NULL)
+    goto done;
+
   /* Open executable file. */
-  file = filesys_open (file_name);
+  file = filesys_open (prog_name);
   if (file == NULL) 
     {
-      printf ("load: %s: open failed\n", file_name);
+      printf ("load: %s: open failed\n", prog_name);
       goto done; 
     }
 
@@ -263,7 +276,7 @@ load (const char *file_name, void (**eip) (void), void **esp)
       || ehdr.e_phentsize != sizeof (struct Elf32_Phdr)
       || ehdr.e_phnum > 1024) 
     {
-      printf ("load: %s: error loading executable\n", file_name);
+      printf ("load: %s: error loading executable\n", prog_name);
       goto done; 
     }
 
@@ -327,7 +340,7 @@ load (const char *file_name, void (**eip) (void), void **esp)
     }
 
   /* Set up stack. */
-  if (!setup_stack (esp))
+  if (!setup_stack (esp, cmdline))
     goto done;
 
   /* Start address. */
@@ -337,6 +350,8 @@ load (const char *file_name, void (**eip) (void), void **esp)
 
  done:
   /* We arrive here whether the load is successful or not. */
+  if (cmd_copy != NULL)
+    palloc_free_page (cmd_copy); 
   file_close (file);
   return success;
 }
@@ -452,21 +467,89 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
 /** Create a minimal stack by mapping a zeroed page at the top of
    user virtual memory. */
 static bool
-setup_stack (void **esp) 
+setup_stack (void **esp, const char *cmdline) 
 {
   uint8_t *kpage;
   bool success = false;
 
+  char *cmd_copy = NULL;
+  char *argv[128];
+  char *arg_addr[128];
+  char *token, *save_ptr;
+  int argc = 0;
+  int i;
+
   kpage = palloc_get_page (PAL_USER | PAL_ZERO);
-  if (kpage != NULL) 
+  if (kpage == NULL)
+    return false;
+
+  success = install_page (((uint8_t *) PHYS_BASE) - PGSIZE, kpage, true);
+  if (!success)
     {
-      success = install_page (((uint8_t *) PHYS_BASE) - PGSIZE, kpage, true);
-      if (success)
-        *esp = PHYS_BASE;
-      else
-        palloc_free_page (kpage);
+      palloc_free_page (kpage);
+      return false;
     }
-  return success;
+
+  *esp = PHYS_BASE;
+
+  /* Copy command line so strtok_r can safely tokenize it. */
+  cmd_copy = palloc_get_page (0);
+  if (cmd_copy == NULL)
+    return false;
+  strlcpy (cmd_copy, cmdline, PGSIZE);
+
+  /* Tokenize command line into argv[]. */
+  for (token = strtok_r (cmd_copy, " ", &save_ptr);
+       token != NULL;
+       token = strtok_r (NULL, " ", &save_ptr))
+    {
+      argv[argc++] = token;
+    }
+
+  /* Push argument strings in reverse order. */
+  for (i = argc - 1; i >= 0; i--)
+    {
+      size_t len = strlen (argv[i]) + 1;
+      *esp -= len;
+      memcpy (*esp, argv[i], len);
+      arg_addr[i] = *esp;
+    }
+
+  /* Word-align to 4 bytes. */
+  while ((uintptr_t) *esp % 4 != 0)
+    {
+      *esp -= 1;
+      *(uint8_t *)(*esp) = 0;
+    }
+
+  /* Push argv[argc] = NULL. */
+  *esp -= sizeof (char *);
+  *(char **)(*esp) = NULL;
+
+  /* Push argv[i] pointers in reverse order. */
+  for (i = argc - 1; i >= 0; i--)
+    {
+      *esp -= sizeof (char *);
+      *(char **)(*esp) = arg_addr[i];
+    }
+
+  /* Push argv (address of argv[0]). */
+  {
+    char **argv_start = (char **)*esp;
+    *esp -= sizeof (char **);
+    *(char ***)(*esp) = argv_start;
+  }
+
+  /* Push argc. */
+  *esp -= sizeof (int);
+  *(int *)(*esp) = argc;
+
+  /* Push fake return address. */
+  *esp -= sizeof (void *);
+  *(void **)(*esp) = NULL;
+
+  palloc_free_page (cmd_copy);
+  return true;
 }
 
 /** Adds a mapping from user virtual address UPAGE to kernel
